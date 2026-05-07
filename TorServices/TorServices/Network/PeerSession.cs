@@ -41,6 +41,17 @@ public class PeerSession : IDisposable
         _stream = _tcp.GetStream();
     }
 
+    // Constructor for incoming connections
+    public PeerSession(TcpClient existingClient, byte[] infoHash, string address)
+    {
+        Address = address;
+        _infoHash = infoHash;
+        _peerId = ""; // Will be set during handshake
+        _tcp = existingClient;
+        _stream = _tcp.GetStream();
+        _bitfield = new Bitfield(0); // Temporary, will be updated when we know piece count
+    }
+
     public async Task<bool> StartAsync(CancellationToken token)
     {
         var peerClient = new PeerClient();
@@ -101,7 +112,7 @@ public class PeerSession : IDisposable
         {
             token.ThrowIfCancellationRequested();
 
-            while (blocks.Count < 10 && requested < length)
+            while (blocks.Count < 30 && requested < length)
             {
                 int bLen = Math.Min(BlockSize, length - requested);
                 blocks.Add(RequestBlockAsync(index, requested, bLen, token));

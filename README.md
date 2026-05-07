@@ -47,9 +47,9 @@ If you want to contribute or build the app yourself:
 - 🔗 [rzmdr413@gmail.com](mailto:rzmdr413@gmail.com)
 - 🔗 [GitHub](https://github.com/Ruzin413)
 - 🔗 [LinkedIn](https://www.linkedin.com/in/ruzin-mdr-393bb9380/)
--  Kathmandu, Nepal
+- 📍 Kathmandu, Nepal
 
-## 📄 License
+##  License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 

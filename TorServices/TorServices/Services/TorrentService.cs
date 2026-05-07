@@ -14,7 +14,16 @@ public class TorrentService
 {
     private readonly ConcurrentDictionary<string, TorrentController> _controllers = new();
     private readonly List<string> _queueOrder = new();
-    private const int MaxActiveDownloads = 2;
+    private int _maxActiveDownloads = 2;
+    public int MaxActiveDownloads 
+    { 
+        get => _maxActiveDownloads; 
+        set 
+        { 
+            _maxActiveDownloads = value; 
+            ProcessQueue(); // Re-process queue when limit increases
+        } 
+    }
     private readonly object _lock = new();
     private readonly CsvDataStore _store;
 
@@ -23,6 +32,25 @@ public class TorrentService
         _store = store;
         LoadFromStore();
         StartBackgroundMonitor();
+        _ = UpnpService.ForwardPort(6881, "RawTorrent");
+        
+        var listener = new PeerListener(6881, OnIncomingConnection);
+        listener.Start();
+    }
+
+    private async Task OnIncomingConnection(byte[] infoHash, PeerSession session)
+    {
+        var controller = _controllers.Values.FirstOrDefault(c => 
+            c.InfoHash != null && c.InfoHash.SequenceEqual(infoHash));
+        
+        if (controller != null)
+        {
+            await controller.HandleIncomingConnection(session);
+        }
+        else
+        {
+            session.Dispose();
+        }
     }
 
     private void StartBackgroundMonitor()

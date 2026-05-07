@@ -7,3 +7,4 @@ public class DownloadRequest
     public string? OutputDir { get; set; }
     public string? ClientId { get; set; }
 }
+ 

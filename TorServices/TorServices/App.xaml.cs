@@ -12,7 +12,6 @@ namespace TorServices
     public partial class App : Application
     {
         private WebApplication? _app;
-
         private async void Application_Startup(object sender, StartupEventArgs e)
         {
             try
@@ -43,11 +42,9 @@ namespace TorServices
 
                 // Register MainWindow in DI so it can use services
                 builder.Services.AddSingleton<MainWindow>();
-
                 // Port Selection Logic
                 int port = 5000;
                 bool started = false;
-                
                 while (!started && port < 5100)
                 {
                     try
@@ -93,7 +90,6 @@ namespace TorServices
                 Application.Current.Shutdown();
             }
         }
-
         protected override async void OnExit(ExitEventArgs e)
         {
             if (_app != null)

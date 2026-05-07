@@ -8,7 +8,7 @@ using System.Threading.Tasks;
 using TorServices.Parser;
 
 namespace TorServices.Network;
-
+ 
 public class ExtensionManager
 {
     private readonly Dictionary<string, int> _remoteExtensions = new();

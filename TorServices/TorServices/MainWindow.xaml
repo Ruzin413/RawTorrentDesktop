@@ -145,10 +145,24 @@
                         </StackPanel>
                     </Grid>
 
-                    <StackPanel Grid.Row="1" Orientation="Horizontal">
-                        <RadioButton x:Name="TabActive" Content="Active" IsChecked="True" Style="{StaticResource TabButtonStyle}" Checked="Tab_Checked"/>
-                        <RadioButton x:Name="TabHistory" Content="History" Style="{StaticResource TabButtonStyle}" Checked="Tab_Checked" Margin="24,0,0,0"/>
-                    </StackPanel>
+                    <Grid Grid.Row="1">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        
+                        <StackPanel Grid.Column="0" Orientation="Horizontal">
+                            <RadioButton x:Name="TabActive" Content="Active" IsChecked="True" Style="{StaticResource TabButtonStyle}" Checked="Tab_Checked"/>
+                            <RadioButton x:Name="TabHistory" Content="History" Style="{StaticResource TabButtonStyle}" Checked="Tab_Checked" Margin="24,0,0,0"/>
+                        </StackPanel>
+
+                        <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                            <TextBlock Text="Max Concurrent Downloads:" VerticalAlignment="Center" FontSize="12" Foreground="#6C757D" Margin="0,0,10,0"/>
+                            <TextBlock x:Name="TxtMaxConcurrency" Text="2" VerticalAlignment="Center" FontSize="12" FontWeight="SemiBold" Foreground="#0D6EFD" Width="20"/>
+                            <Slider x:Name="SliderConcurrency" Width="100" Minimum="1" Maximum="10" Value="2" IsSnapToTickEnabled="True" TickFrequency="1" VerticalAlignment="Center" ValueChanged="SliderConcurrency_ValueChanged" Margin="10,0,0,0"/>
+                        </StackPanel>
+                    </Grid>
                 </Grid>
             </Border>
 

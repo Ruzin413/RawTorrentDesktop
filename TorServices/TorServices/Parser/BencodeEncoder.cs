@@ -11,7 +11,7 @@ public static class BencodeEncoder
         if (value is string str) return EncodeString(str);
         if (value is byte[] bytes) return EncodeBytes(bytes);
         if (value is int or long or uint or ulong) return EncodeInteger(Convert.ToInt64(value));
-
+ 
         throw new ArgumentException($"Unsupported type for Bencode encoding: {value.GetType()}");
     }
 

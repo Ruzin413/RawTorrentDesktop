@@ -7,7 +7,7 @@ using TorServices.Parser;
 
 namespace TorServices.DHT;
 
-public class DhtClient : IDisposable
+public class DhtClient : IDisposable 
 {
     private readonly UdpClient _udp = null!;
     private readonly DhtNodeId _localId;

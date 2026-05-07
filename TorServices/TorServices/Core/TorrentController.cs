@@ -24,7 +24,8 @@ public class TorrentController
     private PieceManager? _pieceManager;
     private CancellationTokenSource? _cts;
     private readonly SemaphoreSlim _downloadSemaphore = new(1, 1);
-    private const int MaxActiveSessions = 30;
+    private const int MaxActiveSessions = 100;
+    public byte[]? InfoHash { get; private set; }
     public string Id { get; private set; } = Guid.NewGuid().ToString("N");
     public void SetId(string id) => Id = id;
     public string Name { get; set; } = "Initializing...";
@@ -148,6 +149,7 @@ public class TorrentController
 
     private async Task ExecuteDownload(byte[] infoHash, string peerId, TorrentMetadata metadata, List<string> trackers, string? outputDir, List<string>? initialPeers = null)
     {
+        InfoHash = infoHash;
         await _downloadSemaphore.WaitAsync();
         try
         {
@@ -243,7 +245,7 @@ public class TorrentController
                                     while (session.Connected && _pieceManager.CompletedCount < TotalPieces)
                                     {
                                         int pieceIndex = PickPieceRarestFirst(session, _pieceManager, TotalPieces, out bool isEndgame);
-                                        if (pieceIndex == -1) { await Task.Delay(1000); continue; }
+                                        if (pieceIndex == -1) { await Task.Delay(100); continue; }
 
                                         if (_pieceManager.TryClaimPiece(pieceIndex) || isEndgame)
                                         {
@@ -304,12 +306,52 @@ public class TorrentController
         _pieceManager?.Dispose();
 
         _pieceManager = null;
+        }
+        finally
+        {
+            _downloadSemaphore.Release();
+            InfoHash = null;
+        }
     }
-    finally
+
+    public async Task HandleIncomingConnection(PeerSession session)
     {
-        _downloadSemaphore.Release();
+        if (_cts == null || _cts.IsCancellationRequested || _pieceManager == null) 
+        {
+            session.Dispose();
+            return;
+        }
+
+        if (await session.StartAsync(_cts.Token))
+        {
+            lock (_activeSessions) _activeSessions.Add(session);
+            try
+            {
+                while (session.Connected && _pieceManager.CompletedCount < TotalPieces)
+                {
+                    int pieceIndex = PickPieceRarestFirst(session, _pieceManager, TotalPieces, out bool isEndgame);
+                    if (pieceIndex == -1) { await Task.Delay(100); continue; }
+
+                    if (_pieceManager.TryClaimPiece(pieceIndex) || isEndgame)
+                    {
+                        try {
+                            // We use a simplified piece length calculation here for incoming peers
+                            int pLen = GetPieceLength(pieceIndex, TotalPieces, TotalSize, (int)(TotalSize / TotalPieces));
+                            var data = await session.RequestPieceAsync(pieceIndex, pLen, _cts.Token);
+                            _pieceManager.Store(pieceIndex, data);
+                        } catch { 
+                            _pieceManager.ReleasePiece(pieceIndex); 
+                        }
+                    }
+                }
+            }
+            finally 
+            { 
+                lock (_activeSessions) _activeSessions.Remove(session); 
+                session.Dispose(); 
+            }
+        }
     }
-}
 
 
     private int PickPieceRarestFirst(PeerSession session, PieceManager pieceManager, int totalPieces, out bool isEndgame)

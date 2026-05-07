@@ -137,7 +137,6 @@ public class PieceManager : IDisposable
                     {
                         fs.Seek(writeOffsetInFile, SeekOrigin.Begin);
                         fs.Write(data, readOffsetInData, bytesToWrite);
-                        fs.Flush(); // Ensure data is written to disk
                     }
                 }
             }

@@ -7,7 +7,7 @@ public class TorrentProgress
 {
     [Key, ForeignKey("Torrent")]
     public string TorrentId { get; set; } = string.Empty;
-    
+     
     public string Status { get; set; } = "Queued";
     public double Progress { get; set; }
     public int TotalPieces { get; set; }

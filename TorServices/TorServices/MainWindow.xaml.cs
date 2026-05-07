@@ -66,6 +66,11 @@ namespace TorServices
             };
             _timer.Tick += Timer_Tick;
             _timer.Start();
+            
+            // Initialize concurrency slider
+            SliderConcurrency.Value = _torrentService.MaxActiveDownloads;
+            TxtMaxConcurrency.Text = _torrentService.MaxActiveDownloads.ToString();
+
             RefreshTorrents();
         }
 
@@ -269,6 +274,16 @@ namespace TorServices
             catch (Exception ex)
             {
                 MessageBox.Show($"Could not open link: {ex.Message}");
+            }
+        }
+
+        private void SliderConcurrency_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+        {
+            if (_torrentService != null && TxtMaxConcurrency != null)
+            {
+                int val = (int)e.NewValue;
+                _torrentService.MaxActiveDownloads = val;
+                TxtMaxConcurrency.Text = val.ToString();
             }
         }
     }
