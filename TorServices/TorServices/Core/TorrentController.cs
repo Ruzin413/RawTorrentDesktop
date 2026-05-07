@@ -21,8 +21,15 @@ public class TorrentController
     private readonly ConcurrentQueue<string> _peerDiscoveryQueue = new();
     private readonly ConcurrentDictionary<string, bool> _triedPeers = new();
     private readonly List<PeerSession> _activeSessions = new();
+    private readonly List<PeerSession> _unchokedPeers = new();
+    private readonly List<Task> _backgroundTasks = new();
     private PieceManager? _pieceManager;
     private CancellationTokenSource? _cts;
+    private readonly ConcurrentDictionary<string, int> _peerStrikes = new();
+    private readonly ConcurrentDictionary<string, long> _downloadedFromPeer = new();
+    private readonly ConcurrentDictionary<string, long> _uploadedToPeer = new();
+    public bool SequentialMode { get; set; } = false;
+
     private readonly SemaphoreSlim _downloadSemaphore = new(1, 1);
     private const int MaxActiveSessions = 100;
     public byte[]? InfoHash { get; private set; }
@@ -45,9 +52,51 @@ public class TorrentController
     public byte[]? InitialBitfield { get; set; }
 
 
-    public void Stop() => _cts?.Cancel();
+    public async Task Stop()
+    {
+        _cts?.Cancel();
+        
+        // Force-dispose all active sessions to close sockets and release any potential locks
+        lock (_activeSessions)
+        {
+            foreach (var session in _activeSessions.ToArray())
+            {
+                try { session.Dispose(); } catch { }
+            }
+            _activeSessions.Clear();
+        }
+
+        // Wait for all background tasks (Discovery, DHT, Choking, and Peer sessions) to finish
+        Task[] tasks;
+        lock (_backgroundTasks) tasks = _backgroundTasks.ToArray();
+
+        if (tasks.Length > 0)
+        {
+            // Use a timeout to avoid hanging forever if a task is stuck
+            var timeoutTask = Task.Delay(5000);
+            var whenAllTask = Task.WhenAll(tasks);
+            await Task.WhenAny(whenAllTask, timeoutTask);
+            
+            lock (_backgroundTasks) _backgroundTasks.Clear();
+        }
+
+        _pieceManager?.Dispose();
+        _pieceManager = null;
+        
+        // One final GC to help Windows release Memory Mapped File handles
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+    }
     public byte[]? GetBitfield() => _pieceManager?.GetBitfield();
 
+
+    public void AddDiscoveredPeer(string address)
+    {
+        if (!_triedPeers.ContainsKey(address))
+        {
+            _peerDiscoveryQueue.Enqueue(address);
+        }
+    }
 
     public async Task StartDownload(string torrentPath, string? outputDir = null)
     {
@@ -188,32 +237,41 @@ public class TorrentController
         _cts = new CancellationTokenSource();
         var cts = _cts;
 
-        // 1. Start background discovery
-        _ = Task.Run(async () => {
+        // 1. Start parallel background discovery
+        var discoveryTask = Task.Run(async () => {
             while (!cts.IsCancellationRequested) {
-                foreach (var t in GetDiscoveryTrackers(trackers)) {
+                var discoveryTasks = GetDiscoveryTrackers(trackers).Select(async t => {
                     try {
                         var ps = await _tracker.GetPeers(t, infoHash, metadata.TotalLength, peerId);
-                        var newPeers = ps.Where(p => !_triedPeers.ContainsKey(p)).ToList();
-                        if (newPeers.Count > 0) {
-                            foreach (var p in newPeers) _peerDiscoveryQueue.Enqueue(p);
-                        }
+                        foreach (var p in ps) _peerDiscoveryQueue.Enqueue(p);
                     } catch { }
-                }
-                await Task.Delay(TimeSpan.FromMinutes(15), cts.Token);
-            }
-        }, cts.Token);
-
-        _ = Task.Run(async () => {
-            while (!cts.IsCancellationRequested) {
-                var ps = await _dht.GetPeersAsync(infoHash);
-                var newPeers = ps.Where(p => !_triedPeers.ContainsKey(p)).ToList();
-                if (newPeers.Count > 0) {
-                    foreach (var p in newPeers) _peerDiscoveryQueue.Enqueue(p);
-                }
+                });
+                await Task.WhenAll(discoveryTasks);
                 await Task.Delay(TimeSpan.FromMinutes(5), cts.Token);
             }
         }, cts.Token);
+        lock (_backgroundTasks) _backgroundTasks.Add(discoveryTask);
+
+        // 1b. Start Choking (Tit-for-Tat) Loop
+        var chokingTask = Task.Run(async () => {
+            while (!cts.IsCancellationRequested) {
+                ManageChoking();
+                await Task.Delay(10000, cts.Token);
+            }
+        }, cts.Token);
+        lock (_backgroundTasks) _backgroundTasks.Add(chokingTask);
+
+        // 1c. Aggressive DHT discovery
+        var dhtTask = Task.Run(async () => {
+            while (!cts.IsCancellationRequested) {
+                try {
+                    var ps = await _dht.GetPeersAsync(infoHash);
+                    foreach (var p in ps) _peerDiscoveryQueue.Enqueue(p);
+                } catch { }
+                await Task.Delay(TimeSpan.FromMinutes(1), cts.Token);
+            }
+        }, cts.Token);
+        lock (_backgroundTasks) _backgroundTasks.Add(dhtTask);
 
         if (initialPeers != null) {
             Console.WriteLine($"[i] Using {initialPeers.Count} initial peers.");
@@ -221,11 +279,10 @@ public class TorrentController
         }
 
         // 2. Main download loop
-        var downloadTasks = new List<Task>();
         for (int i = 0; i < MaxActiveSessions; i++)
         {
-            downloadTasks.Add(Task.Run(async () => {
-                while (!cts.IsCancellationRequested && _pieceManager.CompletedCount < TotalPieces)
+            var downloadTask = Task.Run(async () => {
+                while (!cts.IsCancellationRequested && _pieceManager != null && _pieceManager.CompletedCount < TotalPieces)
                 {
                     if (_peerDiscoveryQueue.TryDequeue(out string? peerAddr))
                     {
@@ -257,8 +314,15 @@ public class TorrentController
 
                                                 if (PieceVerifier.Verify(data, expectedHash)) {
                                                     _pieceManager.Store(pieceIndex, data);
+                                                    _downloadedFromPeer.AddOrUpdate(session.Address, data.Length, (k, v) => v + data.Length);
                                                 } else {
                                                     _pieceManager.ReleasePiece(pieceIndex);
+                                                    // Optimization 5: Corrupt Peer Banning
+                                                    int strikes = _peerStrikes.AddOrUpdate(session.Address, 1, (k, v) => v + 1);
+                                                    if (strikes >= 3) {
+                                                        Console.WriteLine($"[!] Banning peer {session.Address} for sending corrupt data.");
+                                                        session.Dispose();
+                                                    }
                                                 }
                                             } catch {
                                                 _pieceManager.ReleasePiece(pieceIndex);
@@ -278,7 +342,8 @@ public class TorrentController
                         await Task.Delay(500);
                     }
                 }
-            }));
+            });
+            lock (_backgroundTasks) _backgroundTasks.Add(downloadTask);
         }
 
         while (_pieceManager.CompletedCount < TotalPieces && !cts.IsCancellationRequested) {
@@ -298,7 +363,10 @@ public class TorrentController
 
 
         cts.Cancel();
-        await Task.WhenAll(downloadTasks);
+        Task[] tasks;
+        lock (_backgroundTasks) tasks = _backgroundTasks.ToArray();
+        await Task.WhenAll(tasks);
+        lock (_backgroundTasks) _backgroundTasks.Clear();
         
         _lastCompletedPieces = _pieceManager?.CompletedCount ?? _lastCompletedPieces;
         InitialBitfield = _pieceManager?.GetBitfield() ?? InitialBitfield;
@@ -316,49 +384,97 @@ public class TorrentController
 
     public async Task HandleIncomingConnection(PeerSession session)
     {
-        if (_cts == null || _cts.IsCancellationRequested || _pieceManager == null) 
-        {
-            session.Dispose();
-            return;
-        }
-
-        if (await session.StartAsync(_cts.Token))
-        {
-            lock (_activeSessions) _activeSessions.Add(session);
-            try
+        var task = Task.Run(async () => {
+            if (_cts == null || _cts.IsCancellationRequested || _pieceManager == null) 
             {
-                while (session.Connected && _pieceManager.CompletedCount < TotalPieces)
-                {
-                    int pieceIndex = PickPieceRarestFirst(session, _pieceManager, TotalPieces, out bool isEndgame);
-                    if (pieceIndex == -1) { await Task.Delay(100); continue; }
+                session.Dispose();
+                return;
+            }
 
-                    if (_pieceManager.TryClaimPiece(pieceIndex) || isEndgame)
+            if (await session.StartAsync(_cts.Token))
+            {
+                lock (_activeSessions) _activeSessions.Add(session);
+                try
+                {
+                    while (session.Connected && _pieceManager != null && _pieceManager.CompletedCount < TotalPieces)
                     {
-                        try {
-                            // We use a simplified piece length calculation here for incoming peers
-                            int pLen = GetPieceLength(pieceIndex, TotalPieces, TotalSize, (int)(TotalSize / TotalPieces));
-                            var data = await session.RequestPieceAsync(pieceIndex, pLen, _cts.Token);
-                            _pieceManager.Store(pieceIndex, data);
-                        } catch { 
-                            _pieceManager.ReleasePiece(pieceIndex); 
+                        int pieceIndex = PickPieceRarestFirst(session, _pieceManager, TotalPieces, out bool isEndgame);
+                        if (pieceIndex == -1) { await Task.Delay(100); continue; }
+
+                        if (_pieceManager.TryClaimPiece(pieceIndex) || isEndgame)
+                        {
+                            try {
+                                int pLen = GetPieceLength(pieceIndex, TotalPieces, TotalSize, (int)(TotalSize / TotalPieces));
+                                var data = await session.RequestPieceAsync(pieceIndex, pLen, _cts.Token);
+                                _pieceManager.Store(pieceIndex, data);
+                            } catch { 
+                                _pieceManager.ReleasePiece(pieceIndex); 
+                            }
                         }
                     }
                 }
+                finally 
+                { 
+                    lock (_activeSessions) _activeSessions.Remove(session); 
+                    session.Dispose(); 
+                }
             }
-            finally 
-            { 
-                lock (_activeSessions) _activeSessions.Remove(session); 
-                session.Dispose(); 
-            }
-        }
+        });
+
+        lock (_backgroundTasks) _backgroundTasks.Add(task);
+        await task;
+        lock (_backgroundTasks) _backgroundTasks.Remove(task);
     }
 
+
+    private void ManageChoking()
+    {
+        lock (_activeSessions)
+        {
+            if (_activeSessions.Count <= 4)
+            {
+                foreach (var s in _activeSessions) s.Unchoke();
+                return;
+            }
+
+            // Rank peers by download speed (Tit-for-Tat)
+            var topPeers = _activeSessions
+                .OrderByDescending(s => _downloadedFromPeer.GetValueOrDefault(s.Address, 0))
+                .Take(4)
+                .ToList();
+
+            // Optimistic unchoke (pick one random peer to see if they are fast)
+            var others = _activeSessions.Except(topPeers).ToList();
+            if (others.Count > 0) topPeers.Add(others[Random.Shared.Next(others.Count)]);
+
+            foreach (var s in _activeSessions)
+            {
+                if (topPeers.Contains(s)) s.Unchoke();
+                else s.Choke();
+            }
+
+            // Reset speeds for next interval
+            _downloadedFromPeer.Clear();
+        }
+    }
 
     private int PickPieceRarestFirst(PeerSession session, PieceManager pieceManager, int totalPieces, out bool isEndgame)
     {
         isEndgame = false;
         var candidates = new List<int>();
         var endgameCandidates = new List<int>();
+
+        // Optimization 7: Sequential Mode
+        if (SequentialMode)
+        {
+            for (int i = 0; i < totalPieces; i++)
+            {
+                if (session.Bitfield.HasPiece(i) && !pieceManager.IsPieceCompleted(i))
+                {
+                    if (!pieceManager.IsClaimed(i)) return i;
+                }
+            }
+        }
 
         for (int i = 0; i < totalPieces; i++)
         {

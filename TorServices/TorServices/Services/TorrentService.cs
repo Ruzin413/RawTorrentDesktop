@@ -36,6 +36,20 @@ public class TorrentService
         
         var listener = new PeerListener(6881, OnIncomingConnection);
         listener.Start();
+
+        var lsd = new LsdService(OnLsdPeerFound);
+        lsd.Start();
+    }
+
+    private void OnLsdPeerFound(byte[] infoHash, string address)
+    {
+        var controller = _controllers.Values.FirstOrDefault(c => 
+            c.InfoHash != null && c.InfoHash.SequenceEqual(infoHash));
+        
+        if (controller != null)
+        {
+            controller.AddDiscoveredPeer(address);
+        }
     }
 
     private async Task OnIncomingConnection(byte[] infoHash, PeerSession session)
@@ -244,7 +258,7 @@ public class TorrentService
     }
 
 
-    public bool ResumeTorrent(string id)
+    public async Task<bool> ResumeTorrent(string id)
     {
         if (_controllers.TryGetValue(id, out var controller))
         {
@@ -297,11 +311,11 @@ public class TorrentService
         }
     }
 
-    public bool StopTorrent(string id)
+    public async Task<bool> StopTorrent(string id)
     {
         if (_controllers.TryGetValue(id, out var controller))
         {
-            controller.Stop();
+            await controller.Stop();
             controller.Status = "Stopped";
             ProcessQueue();
             return true;
@@ -309,7 +323,7 @@ public class TorrentService
         return false;
     }
 
-    public Task<bool> RemoveTorrent(string id, bool deleteData = false)
+    public async Task<bool> RemoveTorrent(string id, bool deleteData = false)
     {
         bool found = false;
         string? outputDir = null;
@@ -317,7 +331,7 @@ public class TorrentService
 
         if (_controllers.TryRemove(id, out var controller))
         {
-            controller.Stop();
+            await controller.Stop();
             outputDir = controller.OutputDir;
             name = controller.Name;
             lock (_lock)
@@ -341,19 +355,47 @@ public class TorrentService
 
         if (deleteData && !string.IsNullOrEmpty(outputDir) && !string.IsNullOrEmpty(name))
         {
-            try
-            {
+            await Task.Run(async () => {
                 var targetPath = Path.Combine(outputDir, name);
-                if (Directory.Exists(targetPath)) Directory.Delete(targetPath, true);
-                else if (File.Exists(targetPath)) File.Delete(targetPath);
-            }
-            catch { /* Ignore IO errors during delete */ }
+                Console.WriteLine($"[Service] Attempting to delete data at: {targetPath}");
+
+                for (int i = 0; i < 15; i++) // Increased to 15 retries
+                {
+                    try
+                    {
+                        // Help OS release file handles from Memory Mapped Files
+                        if (i > 0) 
+                        {
+                            GC.Collect();
+                            GC.WaitForPendingFinalizers();
+                            await Task.Delay(1000); // Wait 1s between retries after the first one
+                        }
+
+                        if (Directory.Exists(targetPath)) {
+                            Directory.Delete(targetPath, true);
+                            Console.WriteLine($"[Service] Successfully deleted directory: {targetPath}");
+                            break; 
+                        }
+                        else if (File.Exists(targetPath)) {
+                            File.Delete(targetPath);
+                            Console.WriteLine($"[Service] Successfully deleted file: {targetPath}");
+                            break;
+                        }
+                        else {
+                            break; // Already gone
+                        }
+                    }
+                    catch (Exception ex) { 
+                        Console.WriteLine($"[Service] Delete attempt {i+1} failed: {ex.Message}");
+                    } 
+                }
+            });
         }
 
-        return Task.FromResult(found);
+        return found;
     }
 
-    public Task ClearAllData(string? clientId = null)
+    public async Task ClearAllData(string? clientId = null)
     {
         var idsToRemove = _controllers
             .Where(kvp => string.IsNullOrEmpty(clientId) || kvp.Value.ClientId == clientId)
@@ -364,7 +406,7 @@ public class TorrentService
         {
             if (_controllers.TryRemove(id, out var controller))
             {
-                controller.Stop();
+                await controller.Stop();
                 lock (_lock) _queueOrder.Remove(id);
             }
         }
@@ -383,7 +425,7 @@ public class TorrentService
             }
         }
 
-        return Task.CompletedTask;
+
     }
 
     public async Task<List<string>> DiscoverPeersForMetadata(byte[] infoHash, List<string> trackers, string peerId)

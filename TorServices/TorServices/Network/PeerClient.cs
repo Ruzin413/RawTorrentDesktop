@@ -5,7 +5,7 @@ namespace TorServices.Network;
 
 public class PeerClient
 {
-    public async Task<(bool success, bool extensions)> HandshakeAsync(NetworkStream stream, byte[] infoHash, string peerId)
+    public async Task<(bool success, bool extensions)> HandshakeAsync(NetworkStream stream, byte[] infoHash, string peerId, CancellationToken token = default)
     {
         try
         {
@@ -20,14 +20,14 @@ public class PeerClient
             Buffer.BlockCopy(infoHash, 0, handshake, 28, 20);
             Encoding.ASCII.GetBytes(peerId).CopyTo(handshake, 48);
 
-            await stream.WriteAsync(handshake);
+            await stream.WriteAsync(handshake, token);
 
             byte[] response = new byte[68];
             int read = 0;
 
             while (read < 68)
             {
-                int r = await stream.ReadAsync(response, read, 68 - read);
+                int r = await stream.ReadAsync(response.AsMemory(read, 68 - read), token);
                 if (r == 0) return (false, false);
                 read += r;
             }

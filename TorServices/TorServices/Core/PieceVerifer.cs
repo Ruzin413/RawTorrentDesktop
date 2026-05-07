@@ -1,15 +1,18 @@
+using System;
 using System.Security.Cryptography;
 
 namespace TorServices.Core;
 
 public static class PieceVerifier
 {
-    public static bool Verify(byte[] pieceData, byte[] expectedHash)
+    public static bool Verify(byte[] data, byte[] expectedHash)
     {
-        using var sha1 = SHA1.Create();
-
-        byte[] hash = sha1.ComputeHash(pieceData);
-
-        return hash.SequenceEqual(expectedHash);
+        // Use ReadOnlySpan to avoid unnecessary allocations
+        ReadOnlySpan<byte> dataSpan = data;
+        
+        // Use the static HashData method for thread-safety and zero-allocation (on modern .NET)
+        byte[] actualHash = SHA1.HashData(dataSpan);
+        
+        return CryptographicOperations.FixedTimeEquals(actualHash, expectedHash);
     }
 }

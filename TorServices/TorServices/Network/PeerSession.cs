@@ -55,7 +55,7 @@ public class PeerSession : IDisposable
     public async Task<bool> StartAsync(CancellationToken token)
     {
         var peerClient = new PeerClient();
-        var (hsOk, hsExt) = await peerClient.HandshakeAsync(_stream, _infoHash, _peerId);
+        var (hsOk, hsExt) = await peerClient.HandshakeAsync(_stream, _infoHash, _peerId, token);
         if (!hsOk) return false;
 
         if (hsExt)
@@ -80,6 +80,9 @@ public class PeerSession : IDisposable
         byte id = interested ? PeerMessage.Interested : PeerMessage.NotInterested;
         await PeerClient.SendMessageAsync(_stream, id, Array.Empty<byte>());
     }
+
+    public void Choke() => _ = PeerClient.SendMessageAsync(_stream, PeerMessage.Choke, Array.Empty<byte>());
+    public void Unchoke() => _ = PeerClient.SendMessageAsync(_stream, PeerMessage.Unchoke, Array.Empty<byte>());
 
     public async Task<byte[]> RequestPieceAsync(int index, int length, CancellationToken token)
     {

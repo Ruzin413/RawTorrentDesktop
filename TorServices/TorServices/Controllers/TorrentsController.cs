@@ -219,16 +219,16 @@ public class TorrentsController : ControllerBase
     }
 
     [HttpPost("{id}/resume")]
-    public IActionResult Resume(string id)
+    public async Task<IActionResult> Resume(string id)
     {
-        if (_torrentService.ResumeTorrent(id)) return Ok();
+        if (await _torrentService.ResumeTorrent(id)) return Ok();
         return NotFound();
     }
 
     [HttpPost("{id}/stop")]
-    public IActionResult Stop(string id)
+    public async Task<IActionResult> Stop(string id)
     {
-        if (_torrentService.StopTorrent(id)) return Ok();
+        if (await _torrentService.StopTorrent(id)) return Ok();
         return NotFound();
     }
 

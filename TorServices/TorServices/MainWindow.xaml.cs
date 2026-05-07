@@ -188,15 +188,17 @@ namespace TorServices
             }
         }
 
-        private void MenuToggle_Click(object sender, RoutedEventArgs e)
+        private async void MenuToggle_Click(object sender, RoutedEventArgs e)
         {
             if (GetSelectedTorrent() is { } selected)
             {
                 bool isStopped = selected.Status == "Stopped" || selected.Status == "Error" || selected.Status.StartsWith("Error:");
                 if (isStopped)
-                    _torrentService.ResumeTorrent(selected.Id);
+                    await _torrentService.ResumeTorrent(selected.Id);
                 else
-                    _torrentService.StopTorrent(selected.Id);
+                    await _torrentService.StopTorrent(selected.Id);
+                
+                RefreshTorrents();
             }
         }
 
