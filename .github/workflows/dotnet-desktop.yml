@@ -1,0 +1,52 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*' # Trigger on version tags like v1.0.0
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '10.0.x'
+
+    - name: Restore Dependencies
+      run: dotnet restore RawTorrent/TorServices/TorServices/TorServices.csproj
+
+    - name: Publish App (Self-Contained)
+      run: |
+        dotnet publish RawTorrent/TorServices/TorServices/TorServices.csproj `
+          -c Release `
+          -r win-x64 `
+          --self-contained true `
+          -p:PublishSingleFile=true `
+          -p:PublishReadyToRun=true `
+          -p:IncludeNativeLibrariesForSelfExtract=true `
+          -o RawTorrent/TorServices/TorServices/publish
+
+    - name: Compile Installer (Inno Setup)
+      shell: pwsh
+      run: |
+        & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" RawTorrent/TorServices/TorServices/installer_script.iss
+
+    - name: Create GitHub Release
+      id: create_release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: RawTorrent/TorServices/installer/RawTorrentSetup.exe
+        name: Release ${{ github.ref_name }}
+        draft: false
+        prerelease: false
+        generate_release_notes: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
