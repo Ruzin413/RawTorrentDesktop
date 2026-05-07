@@ -208,15 +208,12 @@ PublishScripts/
 # NuGet v3's project.json files produces more ignorable files
 *.nuget.props
 *.nuget.targets
-
 # Microsoft Azure Build Output
 csx/
 *.build.csdef
-
 # Microsoft Azure Emulator
 ecf/
 rcf/
-
 # Windows Store app package directories and files
 AppPackages/
 BundleArtifacts/
@@ -225,13 +222,11 @@ _pkginfo.txt
 *.appx
 *.appxbundle
 *.appxupload
-
 # Visual Studio cache files
 # files ending in .cache can be ignored
 *.[Cc]ache
 # but keep track of directories ending in .cache
 !?*.[Cc]ache/
-
 # Others
 ClientBin/
 ~$*
@@ -242,7 +237,6 @@ ClientBin/
 *.pfx
 *.publishsettings
 orleans.codegen.cs
-
 # Including strong name files can present a security risk
 # (https://github.com/github/gitignore/pull/2483#issue-259490424)
 #*.snk
@@ -263,12 +257,10 @@ UpgradeLog*.XML
 UpgradeLog*.htm
 ServiceFabricBackup/
 *.rptproj.bak
-
 # SQL Server files
 *.mdf
 *.ldf
 *.ndf
-
 # Business Intelligence projects
 *.rdl.data
 *.bim.layout
@@ -277,20 +269,15 @@ ServiceFabricBackup/
 *- [Bb]ackup.rdl
 *- [Bb]ackup ([0-9]).rdl
 *- [Bb]ackup ([0-9][0-9]).rdl
-
 # Microsoft Fakes
 FakesAssemblies/
-
 # GhostDoc plugin setting file
 *.GhostDoc.xml
-
 # Node.js Tools for Visual Studio
 .ntvs_analysis.dat
 node_modules/
-
 # Visual Studio 6 build log
 *.plg
-
 # Visual Studio 6 workspace options file
 *.opt
 
