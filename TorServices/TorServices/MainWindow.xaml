@@ -254,7 +254,7 @@
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
                         <TextBlock FontSize="10" Foreground="#6C757D">
                             <Hyperlink NavigateUri="mailto:rzmdr413@gmail.com" RequestNavigate="Hyperlink_RequestNavigate" Foreground="#0D6EFD" TextDecorations="None">rzmdr413@gmail.com</Hyperlink>
-                            <Run Text=" | 9813806527 | "/>
+                            <Run Text=" | "/>
                             <Hyperlink NavigateUri="https://github.com/Ruzin413" RequestNavigate="Hyperlink_RequestNavigate" Foreground="#0D6EFD" TextDecorations="None">Github</Hyperlink>
                             <Run Text=" | "/>
                             <Hyperlink NavigateUri="https://www.linkedin.com/in/ruzin-mdr-393bb9380/" RequestNavigate="Hyperlink_RequestNavigate" Foreground="#0D6EFD" TextDecorations="None">LinkedIn</Hyperlink>

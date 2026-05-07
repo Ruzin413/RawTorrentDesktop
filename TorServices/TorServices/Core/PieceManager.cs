@@ -18,7 +18,7 @@ public class PieceManager : IDisposable
     public PieceManager(TorrentMetadata metadata, string outputDir, byte[]? initialBitfield = null)
     {
         _metadata = metadata;
-        _outputDir = string.IsNullOrWhiteSpace(outputDir) ? @"C:\Users\Dell\Desktop\TorrentDownload" : outputDir;
+        _outputDir = string.IsNullOrWhiteSpace(outputDir) ? @"C:" : outputDir;
         
         if (initialBitfield != null)
         {

@@ -15,7 +15,7 @@ namespace TorServices
             InitializeComponent();
             
             // Set default output directory
-            TxtOutputDir.Text = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads", "RawTorrent");
+            TxtOutputDir.Text = @"C:\";
             
             TxtMagnetUri.Focus();
         }

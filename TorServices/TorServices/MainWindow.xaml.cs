@@ -9,7 +9,6 @@ using System.Windows.Threading;
 using Microsoft.Win32;
 using TorServices.Services;
 using TorServices.DTOs;
-
 namespace TorServices
 {
     // Status badge background color
@@ -124,7 +123,8 @@ namespace TorServices
             {
                 var folderDialog = new OpenFolderDialog
                 {
-                    Title = "Select Download Destination"
+                    Title = "Select Download Destination",
+                    InitialDirectory = @"C:\"
                 };
 
                 if (folderDialog.ShowDialog() == true)
@@ -304,7 +304,6 @@ namespace TorServices
         }
 
         private void OnPropertyChanged(string prop) => PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(prop));
-
         private static string FormatBytes(long bytes)
         {
             string[] suffix = { "B", "KB", "MB", "GB", "TB" };
