@@ -399,3 +399,13 @@ FodyWeavers.xsd
 
 # JetBrains Rider
 *.sln.iml
+
+# RawTorrent Specific
+TorServices/TorServices/publish/
+TorServices/installer/
+IconConverter.cs
+fix_icon.ps1
+convert_icon.ps1
+# Keep the scripts but ignore other temp files
+!TorServices/TorServices/publish.ps1
+!TorServices/TorServices/installer_script.iss
