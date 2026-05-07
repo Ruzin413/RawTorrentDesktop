@@ -44,9 +44,9 @@ If you want to contribute or build the app yourself:
 ##  Author
 
 **Rujin Manandhar**
--  [rzmdr413@gmail.com](mailto:rzmdr413@gmail.com)
--  9813806527
--  [GitHub](https://github.com/Ruzin413)
+- 🔗 [rzmdr413@gmail.com](mailto:rzmdr413@gmail.com)
+- 🔗 9813806527
+- 🔗 [GitHub](https://github.com/Ruzin413)
 - 🔗 [LinkedIn](https://www.linkedin.com/in/ruzin-mdr-393bb9380/)
 -  Kathmandu, Nepal
 
