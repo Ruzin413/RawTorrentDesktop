@@ -59,20 +59,30 @@ public class UpnpService
         
         await udp.SendAsync(data, data.Length, "239.255.255.250", 1900);
 
-        var receiveTask = udp.ReceiveAsync();
-        if (await Task.WhenAny(receiveTask, Task.Delay(3000)) != receiveTask) return null;
+        using var cts = new CancellationTokenSource(3000);
+        try
+        {
+            var result = await udp.ReceiveAsync(cts.Token);
+            string response = Encoding.UTF8.GetString(result.Buffer);
+            
+            string? location = response.Split("\r\n")
+                .FirstOrDefault(x => x.StartsWith("LOCATION", StringComparison.OrdinalIgnoreCase))
+                ?.Split(" ", 2)[1].Trim();
 
-        var result = receiveTask.Result;
-        string response = Encoding.UTF8.GetString(result.Buffer);
-        
-        string? location = response.Split("\r\n")
-            .FirstOrDefault(x => x.StartsWith("LOCATION", StringComparison.OrdinalIgnoreCase))
-            ?.Split(" ", 2)[1].Trim();
+            if (string.IsNullOrEmpty(location)) return null;
 
-        if (string.IsNullOrEmpty(location)) return null;
-
-        // Fetch the XML and find the control URL
-        return await ParseControlUrlFromLocation(location);
+            // Fetch the XML and find the control URL
+            return await ParseControlUrlFromLocation(location);
+        }
+        catch (OperationCanceledException)
+        {
+            return null;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[UPnP] Discovery error: {ex.Message}");
+            return null;
+        }
     }
 
     private static async Task<string?> ParseControlUrlFromLocation(string location)

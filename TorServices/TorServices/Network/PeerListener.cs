@@ -23,7 +23,7 @@ public class PeerListener
     {
         _running = true;
         _listener.Start();
-        _ = AcceptLoop();
+        AcceptLoop().FireAndForget("TCP Listener AcceptLoop");
         Console.WriteLine($"[Listener] Now listening for incoming peers on port {((IPEndPoint)_listener.LocalEndpoint).Port}");
     }
 
@@ -40,7 +40,7 @@ public class PeerListener
             try
             {
                 var client = await _listener.AcceptTcpClientAsync();
-                _ = HandleIncomingConnection(client);
+                HandleIncomingConnection(client).FireAndForget("Handle Incoming TCP Connection");
             }
             catch { if (!_running) break; }
         }

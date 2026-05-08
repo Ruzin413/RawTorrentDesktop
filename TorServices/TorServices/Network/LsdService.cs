@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading.Tasks;
+using TorServices.Core;
 
 namespace TorServices.Network;
 
@@ -26,7 +27,7 @@ public class LsdService
     public void Start()
     {
         _running = true;
-        _ = ListenLoop();
+        ListenLoop().FireAndForget("LSD ListenLoop");
     }
 
     public async Task Announce(byte[] infoHash, int port)

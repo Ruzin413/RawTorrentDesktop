@@ -3,6 +3,7 @@ using System.Collections.ObjectModel;
 using System.Globalization;
 using System.Linq;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Media;
 using System.Windows.Threading;
@@ -129,7 +130,7 @@ namespace TorServices
                 var folderDialog = new OpenFolderDialog
                 {
                     Title = "Select Download Destination",
-                    InitialDirectory = @"C:\"
+                    InitialDirectory = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory)
                 };
 
                 if (folderDialog.ShowDialog() == true)
@@ -193,13 +194,132 @@ namespace TorServices
             if (GetSelectedTorrent() is { } selected)
             {
                 bool isStopped = selected.Status == "Stopped" || selected.Status == "Error" || selected.Status.StartsWith("Error:");
-                if (isStopped)
-                    await _torrentService.ResumeTorrent(selected.Id);
-                else
-                    await _torrentService.StopTorrent(selected.Id);
-                
-                RefreshTorrents();
+                try
+                {
+                    if (isStopped)
+                        await _torrentService.ResumeTorrent(selected.Id);
+                    else
+                        await _torrentService.StopTorrent(selected.Id);
+
+                    RefreshTorrents();
+                }
+                catch (Exception ex)
+                {
+                    AppLogger.LogError("PAUSE/RESUME ERROR", ex, $"Torrent='{selected.Name}'");
+                    ShowErrorDialog(isStopped ? "Resume Error" : "Pause Error", ex);
+                }
             }
+        }
+
+        private void ShowErrorDialog(string title, Exception ex)
+        {
+            var win = new Window
+            {
+                Title = title,
+                Width = 700,
+                Height = 460,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                Owner = this,
+                Background = System.Windows.Media.Brushes.White,
+                FontFamily = new System.Windows.Media.FontFamily("Segoe UI"),
+                ResizeMode = ResizeMode.CanResize
+            };
+
+            var grid = new System.Windows.Controls.Grid();
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+            // Header bar
+            var header = new Border
+            {
+                Background = new System.Windows.Media.SolidColorBrush(
+                    (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#DC3545")),
+                Padding = new Thickness(20, 14, 20, 14)
+            };
+            var headerText = new System.Windows.Controls.TextBlock
+            {
+                Text = $"⚠  {title}",
+                Foreground = System.Windows.Media.Brushes.White,
+                FontSize = 16,
+                FontWeight = FontWeights.SemiBold
+            };
+            header.Child = headerText;
+            System.Windows.Controls.Grid.SetRow(header, 0);
+            grid.Children.Add(header);
+
+            // Scrollable error body
+            var scroll = new System.Windows.Controls.ScrollViewer
+            {
+                Margin = new Thickness(20, 16, 20, 8),
+                VerticalScrollBarVisibility = System.Windows.Controls.ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = System.Windows.Controls.ScrollBarVisibility.Auto
+            };
+            var body = new System.Windows.Controls.TextBox
+            {
+                Text = $"Message:\n{ex.Message}\n\nType: {ex.GetType().FullName}\n\nStack Trace:\n{ex.StackTrace}",
+                IsReadOnly = true,
+                TextWrapping = TextWrapping.Wrap,
+                Background = new System.Windows.Media.SolidColorBrush(
+                    (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#FFF5F5")),
+                BorderThickness = new Thickness(1),
+                BorderBrush = new System.Windows.Media.SolidColorBrush(
+                    (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#FFCCCC")),
+                Foreground = new System.Windows.Media.SolidColorBrush(
+                    (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#842029")),
+                FontSize = 12,
+                FontFamily = new System.Windows.Media.FontFamily("Consolas"),
+                Padding = new Thickness(12),
+                AcceptsReturn = true,
+                VerticalScrollBarVisibility = System.Windows.Controls.ScrollBarVisibility.Disabled
+            };
+            scroll.Content = body;
+            System.Windows.Controls.Grid.SetRow(scroll, 1);
+            grid.Children.Add(scroll);
+
+            // Footer with Copy + Close buttons
+            var footer = new Border
+            {
+                Padding = new Thickness(20, 8, 20, 16),
+                BorderBrush = new System.Windows.Media.SolidColorBrush(
+                    (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#E5E7EB")),
+                BorderThickness = new Thickness(0, 1, 0, 0)
+            };
+            var footerPanel = new System.Windows.Controls.StackPanel
+            {
+                Orientation = System.Windows.Controls.Orientation.Horizontal,
+                HorizontalAlignment = HorizontalAlignment.Right
+            };
+            var copyBtn = new System.Windows.Controls.Button
+            {
+                Content = "📋  Copy to Clipboard",
+                Padding = new Thickness(16, 7, 16, 7),
+                Margin = new Thickness(0, 0, 8, 0),
+                Cursor = System.Windows.Input.Cursors.Hand,
+                Background = new System.Windows.Media.SolidColorBrush(
+                    (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#E9ECEF")),
+                BorderThickness = new Thickness(0)
+            };
+            copyBtn.Click += (s, _) => Clipboard.SetText(body.Text);
+            var closeBtn = new System.Windows.Controls.Button
+            {
+                Content = "Close",
+                Padding = new Thickness(16, 7, 16, 7),
+                Background = new System.Windows.Media.SolidColorBrush(
+                    (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#DC3545")),
+                Foreground = System.Windows.Media.Brushes.White,
+                BorderThickness = new Thickness(0),
+                Cursor = System.Windows.Input.Cursors.Hand
+            };
+            closeBtn.Click += (s, _) => win.Close();
+            footerPanel.Children.Add(copyBtn);
+            footerPanel.Children.Add(closeBtn);
+            footer.Child = footerPanel;
+            System.Windows.Controls.Grid.SetRow(footer, 2);
+            grid.Children.Add(footer);
+
+            win.Content = grid;
+            win.ShowDialog();
         }
 
         private void MenuOpenFolder_Click(object sender, RoutedEventArgs e)

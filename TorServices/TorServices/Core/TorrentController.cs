@@ -49,6 +49,7 @@ public class TorrentController
     public string? MagnetUri { get; set; }
     public string? OutputDir { get; set; }
     public string? ClientId { get; set; }
+    public string? MetadataCacheDir { get; set; }
     public byte[]? InitialBitfield { get; set; }
 
 
@@ -80,14 +81,20 @@ public class TorrentController
             lock (_backgroundTasks) _backgroundTasks.Clear();
         }
 
-        _pieceManager?.Dispose();
-        _pieceManager = null;
+        // Save progress before disposing piece manager
+        if (_pieceManager != null)
+        {
+            _lastCompletedPieces = _pieceManager.CompletedCount;
+            InitialBitfield = _pieceManager.GetBitfield();
+            _pieceManager.Dispose();
+            _pieceManager = null;
+        }
         
         // One final GC to help Windows release Memory Mapped File handles
         GC.Collect();
         GC.WaitForPendingFinalizers();
     }
-    public byte[]? GetBitfield() => _pieceManager?.GetBitfield();
+    public byte[]? GetBitfield() => _pieceManager?.GetBitfield() ?? InitialBitfield;
 
 
     public void AddDiscoveredPeer(string address)
@@ -100,6 +107,8 @@ public class TorrentController
 
     public async Task StartDownload(string torrentPath, string? outputDir = null)
     {
+        this.TorrentPath = torrentPath;
+        this.OutputDir = outputDir;
         Console.WriteLine($"[+] Starting torrent download from file: {torrentPath}");
 
 
@@ -125,26 +134,27 @@ public class TorrentController
 
     public async Task StartMagnetDownload(string magnetUri, string? outputDir = null)
     {
-
+        this.MagnetUri = magnetUri;
+        this.OutputDir = outputDir;
         var magnet = MagnetParser.Parse(magnetUri);
         string peerId = "-TS0001-" + Guid.NewGuid().ToString("N")[..12];
 
         Console.WriteLine("[*] Searching DHT and Trackers for magnet peers...");
         
         // 1. Initial concurrent discovery for metadata fetching
-        _ = Task.Run(async () => {
+        Task.Run(async () => {
             var ps = await _dht.GetPeersAsync(magnet.InfoHash);
             foreach (var p in ps) if (_triedPeers.TryAdd(p, true)) _peerDiscoveryQueue.Enqueue(p);
-        });
+        }).FireAndForget("DHT Discovery");
 
         foreach (var url in GetDiscoveryTrackers(magnet.Trackers))
         {
-            _ = Task.Run(async () => {
+            Task.Run(async () => {
                 try {
                     var ps = await _tracker.GetPeers(url, magnet.InfoHash, 0, peerId);
                     foreach (var p in ps) if (_triedPeers.TryAdd(p, true)) _peerDiscoveryQueue.Enqueue(p);
                 } catch { }
-            });
+            }).FireAndForget("Tracker Discovery");
         }
 
         // Wait for at least some peers to be discovered
@@ -191,7 +201,29 @@ public class TorrentController
 
         var parser = new BencodeParser(infoData);
         var infoDict = parser.Parse() as Dictionary<string, object>;
-        var metadata = new TorrentMetadata(infoDict!);
+        if (infoDict == null)
+        {
+            Status = "Error: Metadata Parsing Failed";
+            return;
+        }
+        var metadata = new TorrentMetadata(infoDict);
+
+        // Cache metadata so we don't have to fetch it again on resume
+        if (!string.IsNullOrEmpty(MetadataCacheDir) && infoDict != null)
+        {
+            try
+            {
+                Directory.CreateDirectory(MetadataCacheDir);
+                string hexHash = BitConverter.ToString(magnet.InfoHash).Replace("-", "").ToLower();
+                string cachePath = Path.Combine(MetadataCacheDir, hexHash + ".torrent");
+                
+                var rootDict = new Dictionary<string, object> { { "info", infoDict } };
+                byte[] torrentFileBytes = BencodeEncoder.EncodeDictionary(rootDict);
+                await File.WriteAllBytesAsync(cachePath, torrentFileBytes);
+                this.TorrentPath = cachePath;
+            }
+            catch { /* non-critical */ }
+        }
 
         await ExecuteDownload(magnet.InfoHash, peerId, metadata, magnet.Trackers, outputDir);
     }
@@ -211,21 +243,33 @@ public class TorrentController
         _lastCompletedPieces = InitialBitfield != null ? CountSetBits(InitialBitfield) : 0;
         TotalSize = metadata.TotalLength;
 
-        Name = metadata.Name;
+        bool isResume = Name != "Initializing...";
         
-        // Handle name conflicts
-        string finalName = Name;
-        int counter = 1;
-        while (Directory.Exists(Path.Combine(outputDir!, finalName)) || 
-               File.Exists(Path.Combine(outputDir!, finalName)))
+        if (!isResume)
         {
-            finalName = $"{Name} ({counter++})";
+            Name = metadata.Name;
+            
+            // Handle name conflicts
+            string finalName = Name;
+            int counter = 1;
+            while (Directory.Exists(Path.Combine(outputDir!, finalName)) || 
+                   File.Exists(Path.Combine(outputDir!, finalName)))
+            {
+                finalName = $"{Name} ({counter++})";
+            }
+            
+            if (finalName != Name)
+            {
+                Name = finalName;
+            }
+            metadata.Rename(Name);
         }
-        
-        if (finalName != Name)
+        else
         {
-            Name = finalName;
-            metadata.Rename(finalName);
+            if (metadata.Name != Name)
+            {
+                metadata.Rename(Name);
+            }
         }
         
         Status = "Downloading";
@@ -239,37 +283,43 @@ public class TorrentController
 
         // 1. Start parallel background discovery
         var discoveryTask = Task.Run(async () => {
-            while (!cts.IsCancellationRequested) {
-                var discoveryTasks = GetDiscoveryTrackers(trackers).Select(async t => {
-                    try {
-                        var ps = await _tracker.GetPeers(t, infoHash, metadata.TotalLength, peerId);
-                        foreach (var p in ps) _peerDiscoveryQueue.Enqueue(p);
-                    } catch { }
-                });
-                await Task.WhenAll(discoveryTasks);
-                await Task.Delay(TimeSpan.FromMinutes(5), cts.Token);
-            }
+            try {
+                while (!cts.IsCancellationRequested) {
+                    var discoveryTasks = GetDiscoveryTrackers(trackers).Select(async t => {
+                        try {
+                            var ps = await _tracker.GetPeers(t, infoHash, metadata.TotalLength, peerId);
+                            foreach (var p in ps) _peerDiscoveryQueue.Enqueue(p);
+                        } catch { }
+                    });
+                    await Task.WhenAll(discoveryTasks);
+                    await Task.Delay(TimeSpan.FromMinutes(5), cts.Token);
+                }
+            } catch (OperationCanceledException) { /* normal shutdown */ }
         }, cts.Token);
         lock (_backgroundTasks) _backgroundTasks.Add(discoveryTask);
 
         // 1b. Start Choking (Tit-for-Tat) Loop
         var chokingTask = Task.Run(async () => {
-            while (!cts.IsCancellationRequested) {
-                ManageChoking();
-                await Task.Delay(10000, cts.Token);
-            }
+            try {
+                while (!cts.IsCancellationRequested) {
+                    ManageChoking();
+                    await Task.Delay(10000, cts.Token);
+                }
+            } catch (OperationCanceledException) { /* normal shutdown */ }
         }, cts.Token);
         lock (_backgroundTasks) _backgroundTasks.Add(chokingTask);
 
         // 1c. Aggressive DHT discovery
         var dhtTask = Task.Run(async () => {
-            while (!cts.IsCancellationRequested) {
-                try {
-                    var ps = await _dht.GetPeersAsync(infoHash);
-                    foreach (var p in ps) _peerDiscoveryQueue.Enqueue(p);
-                } catch { }
-                await Task.Delay(TimeSpan.FromMinutes(1), cts.Token);
-            }
+            try {
+                while (!cts.IsCancellationRequested) {
+                    try {
+                        var ps = await _dht.GetPeersAsync(infoHash);
+                        foreach (var p in ps) _peerDiscoveryQueue.Enqueue(p);
+                    } catch (OperationCanceledException) { throw; } catch { }
+                    await Task.Delay(TimeSpan.FromMinutes(1), cts.Token);
+                }
+            } catch (OperationCanceledException) { /* normal shutdown */ }
         }, cts.Token);
         lock (_backgroundTasks) _backgroundTasks.Add(dhtTask);
 
@@ -346,9 +396,11 @@ public class TorrentController
             lock (_backgroundTasks) _backgroundTasks.Add(downloadTask);
         }
 
-        while (_pieceManager.CompletedCount < TotalPieces && !cts.IsCancellationRequested) {
-            await Task.Delay(1000);
-        }
+        try {
+            while (_pieceManager.CompletedCount < TotalPieces && !cts.IsCancellationRequested) {
+                await Task.Delay(1000, cts.Token);
+            }
+        } catch (OperationCanceledException) { /* paused/stopped */ }
 
         if (_pieceManager.CompletedCount >= TotalPieces)
         {
@@ -365,7 +417,7 @@ public class TorrentController
         cts.Cancel();
         Task[] tasks;
         lock (_backgroundTasks) tasks = _backgroundTasks.ToArray();
-        await Task.WhenAll(tasks);
+        try { await Task.WhenAll(tasks); } catch (OperationCanceledException) { /* expected */ }
         lock (_backgroundTasks) _backgroundTasks.Clear();
         
         _lastCompletedPieces = _pieceManager?.CompletedCount ?? _lastCompletedPieces;

@@ -6,6 +6,7 @@ using TorServices.DTOs;
 using TorServices.Data;
 using TorServices.Network;
 using TorServices.DHT;
+using TorServices.Parser;
 
 
 namespace TorServices.Services;
@@ -26,13 +27,19 @@ public class TorrentService
     }
     private readonly object _lock = new();
     private readonly CsvDataStore _store;
+    private readonly string _metadataDir;
 
     public TorrentService(CsvDataStore store)
     {
         _store = store;
+        _metadataDir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "RawTorrent", "Metadata");
+        Directory.CreateDirectory(_metadataDir);
+
         LoadFromStore();
         StartBackgroundMonitor();
-        _ = UpnpService.ForwardPort(6881, "RawTorrent");
+        UpnpService.ForwardPort(6881, "RawTorrent").FireAndForget("UPnP Port Forwarding");
         
         var listener = new PeerListener(6881, OnIncomingConnection);
         listener.Start();
@@ -69,7 +76,7 @@ public class TorrentService
 
     private void StartBackgroundMonitor()
     {
-        _ = Task.Run(async () =>
+        Task.Run(async () =>
         {
             while (true)
             {
@@ -90,7 +97,7 @@ public class TorrentService
                     }
                 }
             }
-        });
+        }).FireAndForget("Background Monitor");
     }
 
     private void LoadFromStore()
@@ -110,11 +117,22 @@ public class TorrentService
                     OutputDir = record.OutputDir,
                     MagnetUri = record.MagnetUri,
                     TorrentPath = record.TorrentPath,
+                    MetadataCacheDir = _metadataDir,
                     InitialBitfield = progress?.Bitfield,
                     TotalPieces = progress?.TotalPieces ?? 0,
                     Status = "Stopped",
                     ClientId = record.ClientId
                 };
+
+                // If it's a magnet link, check if we have metadata cached
+                if (string.IsNullOrEmpty(controller.TorrentPath) && !string.IsNullOrEmpty(controller.MagnetUri))
+                {
+                    string cachePath = Path.Combine(_metadataDir, record.Id.ToLower() + ".torrent");
+                    if (File.Exists(cachePath))
+                    {
+                        controller.TorrentPath = cachePath;
+                    }
+                }
 
                 controller.SetId(record.Id);
                 _controllers[record.Id] = controller;
@@ -195,9 +213,18 @@ public class TorrentService
 
     public Task<string> StartMagnet(string uri, string? outputDir = null, string? clientId = null)
     {
-        var controller = new TorrentController { MagnetUri = uri, OutputDir = outputDir, ClientId = clientId };
+        var controller = new TorrentController { MagnetUri = uri, OutputDir = outputDir, ClientId = clientId, MetadataCacheDir = _metadataDir };
+        var magnet = MagnetParser.Parse(uri);
+        controller.SetId(BitConverter.ToString(magnet.InfoHash).Replace("-", "").ToLower());
+
+        // Check if metadata already cached
+        string cachePath = Path.Combine(_metadataDir, controller.Id.ToLower() + ".torrent");
+        if (File.Exists(cachePath))
+        {
+            controller.TorrentPath = cachePath;
+        }
+
         _controllers[controller.Id] = controller;
-        
         SaveToStore(controller);
 
         lock (_lock)
@@ -291,7 +318,7 @@ public class TorrentService
                 {
                     controller.Status = "Starting..."; // Temporary status to avoid double-pick
                     
-                    _ = Task.Run(async () => {
+                    Task.Run(async () => {
                         try {
                             if (!string.IsNullOrEmpty(controller.TorrentPath))
                                 await controller.StartDownload(controller.TorrentPath, controller.OutputDir);
@@ -299,10 +326,11 @@ public class TorrentService
                                 await controller.StartMagnetDownload(controller.MagnetUri, controller.OutputDir);
                         } catch (Exception ex) {
                             controller.Status = $"Error: {ex.Message}";
+                            AppLogger.LogError("DOWNLOAD ERROR", ex, $"Torrent='{controller.Name}'");
                         } finally {
                             ProcessQueue(); // Check for next when this one ends
                         }
-                    });
+                    }).FireAndForget("Torrent Download Loop");
 
                     // Check if we can start another one immediately
                     Task.Run(() => ProcessQueue());
@@ -317,6 +345,7 @@ public class TorrentService
         {
             await controller.Stop();
             controller.Status = "Stopped";
+            SaveToStore(controller);
             ProcessQueue();
             return true;
         }
@@ -328,17 +357,13 @@ public class TorrentService
         bool found = false;
         string? outputDir = null;
         string? name = null;
+        TorrentController? controller = null;
 
-        if (_controllers.TryRemove(id, out var controller))
+        if (_controllers.TryGetValue(id, out controller))
         {
             await controller.Stop();
             outputDir = controller.OutputDir;
             name = controller.Name;
-            lock (_lock)
-            {
-                _queueOrder.Remove(id);
-            }
-            ProcessQueue();
             found = true;
         }
 
@@ -347,9 +372,6 @@ public class TorrentService
         {
             if (outputDir == null) outputDir = record.OutputDir;
             if (name == null) name = record.Name;
-
-            _store.RemoveTorrent(id);
-            _store.RemoveProgress(id);
             found = true;
         }
 
@@ -390,6 +412,22 @@ public class TorrentService
                     } 
                 }
             });
+        }
+
+        if (controller != null)
+        {
+            _controllers.TryRemove(id, out _);
+            lock (_lock)
+            {
+                _queueOrder.Remove(id);
+            }
+            ProcessQueue();
+        }
+
+        if (record != null)
+        {
+            _store.RemoveTorrent(id);
+            _store.RemoveProgress(id);
         }
 
         return found;

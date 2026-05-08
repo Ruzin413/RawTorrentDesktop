@@ -63,7 +63,7 @@ public class PeerSession : IDisposable
             await ExtensionManager.SendHandshakeAsync(_stream, new Dictionary<int, string> { { 1, "ut_metadata" }, { 2, "ut_pex" } });
         }
 
-        _ = Task.Run(() => ReceiveLoop(token), token);
+        Task.Run(() => ReceiveLoop(token), token).FireAndForget("ReceiveLoop");
         
         // Signal interest immediately to get into unchoke queue
         await SetInterestedAsync(true);
@@ -81,8 +81,17 @@ public class PeerSession : IDisposable
         await PeerClient.SendMessageAsync(_stream, id, Array.Empty<byte>());
     }
 
-    public void Choke() => _ = PeerClient.SendMessageAsync(_stream, PeerMessage.Choke, Array.Empty<byte>());
-    public void Unchoke() => _ = PeerClient.SendMessageAsync(_stream, PeerMessage.Unchoke, Array.Empty<byte>());
+    public void Choke() => SafeSendMessageAsync(PeerMessage.Choke, Array.Empty<byte>()).FireAndForget("Send Choke");
+    public void Unchoke() => SafeSendMessageAsync(PeerMessage.Unchoke, Array.Empty<byte>()).FireAndForget("Send Unchoke");
+
+    private async Task SafeSendMessageAsync(byte id, byte[] payload)
+    {
+        try
+        {
+            await PeerClient.SendMessageAsync(_stream, id, payload);
+        }
+        catch { }
+    }
 
     public async Task<byte[]> RequestPieceAsync(int index, int length, CancellationToken token)
     {
@@ -127,17 +136,29 @@ public class PeerSession : IDisposable
             
             if (finishedTask == timeoutTask)
             {
+                _ = Task.WhenAll(blocks).ContinueWith(t => { if (t.IsFaulted) _ = t.Exception; });
                 throw new TimeoutException("Timed out waiting for block data.");
             }
 
-            var finished = (Task<byte[]>)finishedTask;
-            blocks.Remove(finished);
-            
-            byte[] blockData = await finished;
-            // The block data includes header (index 4 bytes, begin 4 bytes)
-            Buffer.BlockCopy(blockData, 8, data, (blockData[4] << 24) | (blockData[5] << 16) | (blockData[6] << 8) | blockData[7], blockData.Length - 8);
-            received += (blockData.Length - 8);
+            try
+            {
+                var finished = (Task<byte[]>)finishedTask;
+                byte[] blockData = await finished;
+                blocks.Remove(finished);
+                // The block data includes header (index 4 bytes, begin 4 bytes)
+                Buffer.BlockCopy(blockData, 8, data, (blockData[4] << 24) | (blockData[5] << 16) | (blockData[6] << 8) | blockData[7], blockData.Length - 8);
+                received += (blockData.Length - 8);
+            }
+            catch (Exception ex)
+            {
+                // Observe other tasks if one fails
+                _ = Task.WhenAll(blocks).ContinueWith(t => { if (t.IsFaulted) _ = t.Exception; });
+                throw;
+            }
         }
+
+        // Ensure all remaining tasks are observed if we finish early for some reason (though here we wait for all)
+        if (blocks.Count > 0) _ = Task.WhenAll(blocks).ContinueWith(t => { if (t.IsFaulted) _ = t.Exception; });
 
         return data;
     }
