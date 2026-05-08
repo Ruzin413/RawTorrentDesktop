@@ -2,7 +2,6 @@
 
 **RawTorrent** is a sleek, modern, and high-performance torrent client built with C# and WPF. It features a premium design, real-time download tracking, and a self-contained engine that makes it easy to install and run on any Windows machine.
 
-![RawTorrent Icon](TorServices/TorServices/Resources/app_icon.png)
 
 ##  Features
 
